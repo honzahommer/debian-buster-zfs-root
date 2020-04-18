@@ -28,6 +28,7 @@
 
 ZPOOL=${TARGET_ZPOOL:-rpool}
 TARGETDIST=${TARGET_DIST:-buster}
+DEFAULT=${TARGET_DEFAULT:-debian-$TARGETDIST}
 
 PARTBIOS=${TARGET_PARTBIOS:-1}
 PARTEFI=${TARGET_PARTEFI:-2}
@@ -201,10 +202,14 @@ zfs set compression=lz4 $ZPOOL
 #zfs set acltype=posixacl $ZPOOL
 
 zfs create $ZPOOL/ROOT
-zfs create -o mountpoint=/ $ZPOOL/ROOT/debian-$TARGETDIST
-zpool set bootfs=$ZPOOL/ROOT/debian-$TARGETDIST $ZPOOL
+zfs create -o mountpoint=/ $ZPOOL/ROOT/$DEFAULT
+zpool set bootfs=$ZPOOL/ROOT/$DEFAULT $ZPOOL
 
-zfs create -o mountpoint=/tmp -o setuid=off -o exec=off -o devices=off -o com.sun:auto-snapshot=false -o quota=$SIZETMP $ZPOOL/tmp
+if [ $(echo $SIZETMP | grep -Eo [0-9]+) -gt 0 ]; then
+	zfs create -o mountpoint=/tmp -o setuid=off -o exec=off -o devices=off -o com.sun:auto-snapshot=false -o quota=$SIZETMP $ZPOOL/tmp
+else
+	zfs create -o mountpoint=/tmp -o setuid=off -o exec=off -o devices=off -o com.sun:auto-snapshot=false $ZPOOL/tmp
+fi
 chmod 1777 /target/tmp
 
 # /var needs to be mounted via fstab, the ZFS mount script runs too late during boot
@@ -213,15 +218,21 @@ mkdir -v /target/var
 mount -t zfs $ZPOOL/var /target/var
 
 # /var/tmp needs to be mounted via fstab, the ZFS mount script runs too late during boot
-zfs create -o mountpoint=legacy -o com.sun:auto-snapshot=false -o quota=$SIZEVARTMP $ZPOOL/var/tmp
+if [ $(echo $SIZEVARTMP | grep -Eo [0-9]+) -gt 0 ]; then
+	zfs create -o mountpoint=legacy -o com.sun:auto-snapshot=false -o quota=$SIZEVARTMP $ZPOOL/var/tmp
+else
+	zfs create -o mountpoint=legacy -o com.sun:auto-snapshot=false $ZPOOL/var/tmp
+fi
 mkdir -v -m 1777 /target/var/tmp
 mount -t zfs $ZPOOL/var/tmp /target/var/tmp
 chmod 1777 /target/var/tmp
 
-zfs create -V $SIZESWAP -b "$(getconf PAGESIZE)" -o primarycache=metadata -o com.sun:auto-snapshot=false -o logbias=throughput -o sync=always $ZPOOL/swap
-# sometimes needed to wait for /dev/zvol/$ZPOOL/swap to appear
-sleep 2
-mkswap -f /dev/zvol/$ZPOOL/swap
+if [ $(echo $SIZESWAP | grep -Eo [0-9]+) -gt 0 ]; then
+	zfs create -V $SIZESWAP -b "$(getconf PAGESIZE)" -o primarycache=metadata -o com.sun:auto-snapshot=false -o logbias=throughput -o sync=always $ZPOOL/swap
+	# sometimes needed to wait for /dev/zvol/$ZPOOL/swap to appear
+	sleep 2
+	mkswap -f /dev/zvol/$ZPOOL/swap
+fi
 
 zpool status
 zfs list
@@ -247,6 +258,10 @@ cat << EOF >/target/etc/fstab
 $ZPOOL/var                /var            zfs     defaults        0       0
 $ZPOOL/var/tmp            /var/tmp        zfs     defaults        0       0
 EOF
+
+if [ ! $(echo $SIZESWAP | grep -Eo [0-9]+) -gt 0 ]; then
+	sed -i '/swap/d' /target/etc/fstab
+fi
 
 mount --rbind /dev /target/dev
 mount --rbind /proc /target/proc
